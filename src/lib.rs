@@ -218,6 +218,7 @@ impl<'a> State<'a> {
     }
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
+        println!("{:?}", new_size);
         if new_size.width > 0 && new_size.height > 0 {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
@@ -235,8 +236,9 @@ impl<'a> State<'a> {
             contents : bytemuck::cast_slice(&all_vertices),
             usage : wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST
         });
+        let i = self.index_data.len() as u16;
 
-        let indices = [self.num_indices as u16, self.num_indices as u16 + 1, self.num_indices as u16 + 2];
+        let indices = [i, i + 1, i + 2];
 
         let mut all_indices = self.index_data.clone();
         all_indices.extend_from_slice(&indices);
@@ -343,7 +345,9 @@ impl ApplicationHandler for App<'_> {
         event: winit::event::WindowEvent,
     ) {
         if let Some(receiver) = &self.receiver {
-            if let Ok(rec) = receiver.recv_timeout(Duration::from_millis(16)) {
+
+
+            if let Ok(rec) = receiver.try_recv() {
                 match rec.0.as_str(){
                     "message" => println!("{}", stringify_value(rec.1)),
                     "triangle" => {
