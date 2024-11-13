@@ -55,12 +55,9 @@ impl Vertex {
 }
 
 const VERTICES: &[Vertex] = &[
-    Vertex { position: [0.0, 0.5, 0.0], color: [1.0, 0.0, 0.0] },
-    Vertex { position: [-0.5, -0.5, 0.0], color: [0.0, 1.0, 0.0] },
-    Vertex { position: [0.5, -0.5, 0.0], color: [0.0, 0.0, 1.0] },
 ];
 
-const INDICES: &[u16] = &[0, 1, 2];
+const INDICES: &[u16] = &[];
  
 
 
@@ -255,10 +252,12 @@ impl<'a> State<'a> {
 
         self.vertex_data = all_vertices;
         self.index_data = all_indices;
+        println!("{:?} {:?}", self.vertex_data, self.index_data);
     }
 
     pub fn render(&self) -> Result<(), wgpu::SurfaceError> {
         let output = self.surface.get_current_texture()?;
+
 
         let view = output
             .texture
@@ -291,10 +290,13 @@ impl<'a> State<'a> {
                 timestamp_writes: None,
             });
 
-            render_pass.set_pipeline(&self.render_pipeline); // 2.
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16); // 1.
-            render_pass.draw_indexed(0..self.num_indices, 0, 0..1); // 2.
+            render_pass.set_pipeline(&self.render_pipeline); // 2.  
+                                                            
+            if self.index_data.len() >= 1{
+                render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16); // 1.
+                render_pass.draw_indexed(0..self.index_data.len() as u32, 0, 0..1); // 2. 
+            }
         }
 
         // submit will accept anything that implements IntoIter
@@ -363,7 +365,6 @@ impl ApplicationHandler for App<'_> {
 
                             }).collect();
 
-                            println!("{:#?}", vert);
 
                             
                             state.add_vertices(&vert); 
