@@ -10,13 +10,21 @@ struct VertexOutput {
     @location(0) tex_coords: vec2<f32>,
 }
 
+// Bind Group 1
+struct Uniforms {
+    time: f32
+};
+
+@group(1) @binding(0)
+var<uniform> myUniforms: Uniforms;
+
 @vertex
 fn vs_main(
     model: VertexInput,
 ) -> VertexOutput {
     var out: VertexOutput;
     out.tex_coords = model.tex_coords;
-    out.clip_position = vec4<f32>(model.position, 1.0);
+    out.clip_position = vec4<f32>(model.position.x * sin(myUniforms.time), model.position.yz, 1.0);
     return out;
 }
 // Fragment shader

@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-
 use std::sync::{
     mpsc::{self, Receiver, Sender},
     Arc, OnceLock,
@@ -26,11 +25,19 @@ use winit::{
 
 use bytemuck::{Pod, Zeroable};
 
+use std::time::Instant;
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
-struct Vertex{
-    position : [f32;3],
-    tex_coords : [f32; 2]
+struct Uniforms {
+    time: f32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+struct Vertex {
+    position: [f32; 3],
+    tex_coords: [f32; 2],
 }
 
 impl Vertex {
@@ -50,25 +57,34 @@ impl Vertex {
                     shader_location: 1,
                     format: wgpu::VertexFormat::Float32x2, // NEW!
                 },
-            ]
+            ],
         }
     }
 }
 const VERTICES: &[Vertex] = &[
-    Vertex { position: [-0.0868241, 0.49240386, 0.0], tex_coords: [0.4131759, 0.99240386], }, // A
-    Vertex { position: [-0.49513406, 0.06958647, 0.0], tex_coords: [0.0048659444, 0.56958647], }, // B
-    Vertex { position: [-0.21918549, -0.44939706, 0.0], tex_coords: [0.28081453, 0.05060294], }, // C
-    Vertex { position: [0.35966998, -0.3473291, 0.0], tex_coords: [0.85967, 0.1526709], }, // D
-    Vertex { position: [0.44147372, 0.2347359, 0.0], tex_coords: [0.9414737, 0.7347359], }, // E
+    Vertex {
+        position: [-0.0868241, 0.49240386, 0.0],
+        tex_coords: [0.4131759, 0.99240386],
+    }, // A
+    Vertex {
+        position: [-0.49513406, 0.06958647, 0.0],
+        tex_coords: [0.0048659444, 0.56958647],
+    }, // B
+    Vertex {
+        position: [-0.21918549, -0.44939706, 0.0],
+        tex_coords: [0.28081453, 0.05060294],
+    }, // C
+    Vertex {
+        position: [0.35966998, -0.3473291, 0.0],
+        tex_coords: [0.85967, 0.1526709],
+    }, // D
+    Vertex {
+        position: [0.44147372, 0.2347359, 0.0],
+        tex_coords: [0.9414737, 0.7347359],
+    }, // E
 ];
 
-const INDICES: &[u16] = &[
-    0, 1, 4,
-    1, 2, 4,
-    2, 3, 4,
-];
- 
-
+const INDICES: &[u16] = &[0, 1, 4, 1, 2, 4, 2, 3, 4];
 
 struct State<'a> {
     instance: wgpu::Instance,
@@ -77,14 +93,17 @@ struct State<'a> {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     render_pipeline: wgpu::RenderPipeline,
-    
-    vertex_data : Vec<Vertex>,
-    index_data : Vec<u16>,
 
-    vertex_buffer : wgpu::Buffer,
-    index_buffer : wgpu::Buffer,
-    num_indices : u32,
-    diffuse_bind_group : wgpu::BindGroup
+    vertex_data: Vec<Vertex>,
+    index_data: Vec<u16>,
+
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    diffuse_bind_group: wgpu::BindGroup,
+
+    start_time: Instant,
+    uniform_bind_group: wgpu::BindGroup,
+    uniform_buffer: wgpu::Buffer,
 }
 
 impl<'a> State<'a> {
@@ -139,80 +158,77 @@ impl<'a> State<'a> {
 
         surface.configure(&device, &config);
 
-        
         surface.configure(&device, &config);
         // NEW!
-        let diffuse_bytes = include_bytes!("die.png");
+        let diffuse_bytes = include_bytes!("saul.png");
         let diffuse_image = image::load_from_memory(diffuse_bytes).unwrap();
         let diffuse_rgba = diffuse_image.to_rgba8();
 
         use image::GenericImageView;
         let dimensions = diffuse_image.dimensions();
 
-
         let texture_size = wgpu::Extent3d {
-    width: dimensions.0,
-    height: dimensions.1,
-    depth_or_array_layers: 1,
-};
-let diffuse_texture = device.create_texture(
-    &wgpu::TextureDescriptor {
-        // All textures are stored as 3D, we represent our 2D texture
-        // by setting depth to 1.
-        size: texture_size,
-        mip_level_count: 1, // We'll talk about this a little later
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        // Most images are stored using sRGB, so we need to reflect that here.
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-        // TEXTURE_BINDING tells wgpu that we want to use this texture in shaders
-        // COPY_DST means that we want to copy data to this texture
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        label: Some("diffuse_texture"),
-        // This is the same as with the SurfaceConfig. It
-        // specifies what texture formats can be used to
-        // create TextureViews for this texture. The base
-        // texture format (Rgba8UnormSrgb in this case) is
-        // always supported. Note that using a different
-        // texture format is not supported on the WebGL2
-        // backend.
-        view_formats: &[],
-    }
-);
+            width: dimensions.0,
+            height: dimensions.1,
+            depth_or_array_layers: 1,
+        };
+        let diffuse_texture = device.create_texture(&wgpu::TextureDescriptor {
+            // All textures are stored as 3D, we represent our 2D texture
+            // by setting depth to 1.
+            size: texture_size,
+            mip_level_count: 1, // We'll talk about this a little later
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            // Most images are stored using sRGB, so we need to reflect that here.
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            // TEXTURE_BINDING tells wgpu that we want to use this texture in shaders
+            // COPY_DST means that we want to copy data to this texture
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            label: Some("diffuse_texture"),
+            // This is the same as with the SurfaceConfig. It
+            // specifies what texture formats can be used to
+            // create TextureViews for this texture. The base
+            // texture format (Rgba8UnormSrgb in this case) is
+            // always supported. Note that using a different
+            // texture format is not supported on the WebGL2
+            // backend.
+            view_formats: &[],
+        });
 
-queue.write_texture(
-    // Tells wgpu where to copy the pixel data
-    wgpu::ImageCopyTexture {
-        texture: &diffuse_texture,
-        mip_level: 0,
-        origin: wgpu::Origin3d::ZERO,
-        aspect: wgpu::TextureAspect::All,
-    },
-    // The actual pixel data
-    &diffuse_rgba,
-    // The layout of the texture
-    wgpu::ImageDataLayout {
-        offset: 0,
-        bytes_per_row: Some(4 * dimensions.0),
-        rows_per_image: Some(dimensions.1),
-    },
-    texture_size,
-);
+        queue.write_texture(
+            // Tells wgpu where to copy the pixel data
+            wgpu::ImageCopyTexture {
+                texture: &diffuse_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            // The actual pixel data
+            &diffuse_rgba,
+            // The layout of the texture
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * dimensions.0),
+                rows_per_image: Some(dimensions.1),
+            },
+            texture_size,
+        );
 
-// We don't need to configure the texture view much, so let's
-// let wgpu define it.
-let diffuse_texture_view = diffuse_texture.create_view(&wgpu::TextureViewDescriptor::default());
-let diffuse_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-    address_mode_u: wgpu::AddressMode::ClampToEdge,
-    address_mode_v: wgpu::AddressMode::ClampToEdge,
-    address_mode_w: wgpu::AddressMode::ClampToEdge,
-    mag_filter: wgpu::FilterMode::Linear,
-    min_filter: wgpu::FilterMode::Nearest,
-    mipmap_filter: wgpu::FilterMode::Nearest,
-    ..Default::default()
-});
+        // We don't need to configure the texture view much, so let's
+        // let wgpu define it.
+        let diffuse_texture_view =
+            diffuse_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let diffuse_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
 
-let texture_bind_group_layout =
+        let texture_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 entries: &[
                     wgpu::BindGroupLayoutEntry {
@@ -237,23 +253,58 @@ let texture_bind_group_layout =
                 label: Some("texture_bind_group_layout"),
             });
 
-let diffuse_bind_group = device.create_bind_group(
-    &wgpu::BindGroupDescriptor {
-        layout: &texture_bind_group_layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&diffuse_texture_view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::Sampler(&diffuse_sampler),
-            }
-        ],
-        label: Some("diffuse_bind_group"),
-    }
-);
+        let diffuse_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &texture_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&diffuse_texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&diffuse_sampler),
+                },
+            ],
+            label: Some("diffuse_bind_group"),
+        });
 
+        let start_time = Instant::now();
+
+        let uniform_data = Uniforms {
+            time: start_time.elapsed().as_secs_f32(),
+        };
+
+        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("uniform_buffer"),
+            contents: bytemuck::cast_slice(&[uniform_data]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let uniform_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("uniform_bind_group_layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(
+                            std::mem::size_of::<Uniforms>() as u64
+                        ),
+                    },
+                    count: None,
+                }],
+            });
+
+        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("uniform_bind_group"),
+            layout: &uniform_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform_buffer.as_entire_binding(),
+            }],
+        });
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shader"),
@@ -263,7 +314,7 @@ let diffuse_bind_group = device.create_bind_group(
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[&texture_bind_group_layout],
+                bind_group_layouts: &[&texture_bind_group_layout, &uniform_bind_group_layout],
                 push_constant_ranges: &[],
             });
 
@@ -273,7 +324,7 @@ let diffuse_bind_group = device.create_bind_group(
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"), // 1.
-                buffers: &[Vertex::desc()],                 // 2.
+                buffers: &[Vertex::desc()],   // 2.
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -310,24 +361,17 @@ let diffuse_bind_group = device.create_bind_group(
             cache: None,     // 6.
         });
 
-        let vertex_buffer = device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
             contents: bytemuck::cast_slice(VERTICES),
             usage: wgpu::BufferUsages::VERTEX,
-        }
-        );
-        
-        let index_buffer = device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("Index Buffer"),
-                contents: bytemuck::cast_slice(INDICES),
-                usage: wgpu::BufferUsages::INDEX,
-            }
-        );
+        });
 
-        let num_indices = INDICES.len() as u32;
-        
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Index Buffer"),
+            contents: bytemuck::cast_slice(INDICES),
+            usage: wgpu::BufferUsages::INDEX,
+        });
 
         Self {
             instance,
@@ -338,10 +382,13 @@ let diffuse_bind_group = device.create_bind_group(
             render_pipeline,
             vertex_buffer,
             index_buffer,
-            num_indices,
-            vertex_data : VERTICES.to_vec(),
-            index_data : INDICES.to_vec(),
-            diffuse_bind_group
+            vertex_data: VERTICES.to_vec(),
+            index_data: INDICES.to_vec(),
+            diffuse_bind_group,
+
+            uniform_bind_group,
+            start_time,
+            uniform_buffer,
         }
     }
 
@@ -353,16 +400,17 @@ let diffuse_bind_group = device.create_bind_group(
         }
     }
 
-    pub fn add_vertices(&mut self, vertices : &[Vertex]){
-
+    pub fn add_vertices(&mut self, vertices: &[Vertex]) {
         let mut all_vertices = self.vertex_data.clone();
-        all_vertices.extend_from_slice(vertices); 
+        all_vertices.extend_from_slice(vertices);
 
-        let vertex_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor{
-            label : Some("new vertices"),
-            contents : bytemuck::cast_slice(&all_vertices),
-            usage : wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST
-        });
+        let vertex_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("new vertices"),
+                contents: bytemuck::cast_slice(&all_vertices),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            });
         let i = self.index_data.len() as u16;
 
         let indices = [i, i + 1, i + 2];
@@ -370,11 +418,13 @@ let diffuse_bind_group = device.create_bind_group(
         let mut all_indices = self.index_data.clone();
         all_indices.extend_from_slice(&indices);
 
-        let index_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Index Buffer"),
-            contents: bytemuck::cast_slice(&all_indices),
-            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-        });
+        let index_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Index Buffer"),
+                contents: bytemuck::cast_slice(&all_indices),
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            });
 
         self.vertex_buffer = vertex_buffer;
         self.index_buffer = index_buffer;
@@ -385,7 +435,6 @@ let diffuse_bind_group = device.create_bind_group(
 
     pub fn render(&self) -> Result<(), wgpu::SurfaceError> {
         let output = self.surface.get_current_texture()?;
-
 
         let view = output
             .texture
@@ -418,14 +467,27 @@ let diffuse_bind_group = device.create_bind_group(
                 timestamp_writes: None,
             });
 
-            render_pass.set_pipeline(&self.render_pipeline); // 2.  
-                                         
-            render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
+            render_pass.set_pipeline(&self.render_pipeline); // 2.
 
-            if self.index_data.len() >= 1{
+            render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
+            render_pass.set_bind_group(1, &self.uniform_bind_group, &[]);
+
+            let updated_uniform = Uniforms {
+                time: self.start_time.elapsed().as_secs_f32(),
+            };
+
+            self.queue.write_buffer(
+                &self.uniform_buffer,
+                0,
+                bytemuck::cast_slice(&[updated_uniform]),
+            );
+
+            if self.index_data.len() >= 1 {
                 render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-                render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16); // 1.
-                render_pass.draw_indexed(0..self.index_data.len() as u32, 0, 0..1); // 2. 
+                render_pass
+                    .set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16); // 1.
+                render_pass.draw_indexed(0..self.index_data.len() as u32, 0, 0..1);
+                // 2.
             }
         }
 
@@ -473,38 +535,36 @@ impl ApplicationHandler for App<'_> {
         event: winit::event::WindowEvent,
     ) {
         if let Some(receiver) = &self.receiver {
-
-
             if let Ok(rec) = receiver.try_recv() {
-                match rec.0.as_str(){
+                match rec.0.as_str() {
                     "message" => println!("{}", stringify_value(rec.1)),
                     "triangle" => {
-                        if let Some(state) = self.state.as_mut(){
-                            
+                        if let Some(state) = self.state.as_mut() {
                             let arr = rec.1.to_arr().unwrap();
-                            let vert : Vec<Vertex> = arr.iter().map(|x|{
-                                let p: [f32; 3] = x.to_arr().unwrap()
-                                    .iter().map(|x|{
-                                        x.to_f64().unwrap() as f32
-                                    }).collect::<Vec<f32>>()
-                                    .try_into().unwrap();
-                               
-                                Vertex{
-                                    position : p,
-                                    tex_coords : [0.0, 0.0]
-                                }
+                            let vert: Vec<Vertex> = arr
+                                .iter()
+                                .map(|x| {
+                                    let p: [f32; 3] = x
+                                        .to_arr()
+                                        .unwrap()
+                                        .iter()
+                                        .map(|x| x.to_f64().unwrap() as f32)
+                                        .collect::<Vec<f32>>()
+                                        .try_into()
+                                        .unwrap();
 
-                            }).collect();
+                                    Vertex {
+                                        position: p,
+                                        tex_coords: [0.0, 0.0],
+                                    }
+                                })
+                                .collect();
 
-
-                            
-                            state.add_vertices(&vert); 
-                            
-
+                            state.add_vertices(&vert);
                         }
-                    },
-                    _ => ()
-                } 
+                    }
+                    _ => (),
+                }
             }
         }
 
@@ -555,9 +615,12 @@ pub extern "Rust" fn start_window(values: HashMap<String, Value>) -> Value {
 #[no_mangle]
 pub extern "Rust" fn send_message(values: HashMap<String, Value>) -> Value {
     if let Some(sender) = RENDER_THREAD_SENDER.get() {
-        let _ = sender.send(
-            ("message".to_string(), values.get("message").unwrap().clone())
-        ).unwrap();
+        let _ = sender
+            .send((
+                "message".to_string(),
+                values.get("message").unwrap().clone(),
+            ))
+            .unwrap();
 
         return Value::nil();
     }
@@ -566,13 +629,14 @@ pub extern "Rust" fn send_message(values: HashMap<String, Value>) -> Value {
 }
 
 #[no_mangle]
-pub extern "Rust" fn send_triangle(values: HashMap<String, Value>) -> Value{
-    if let Some(sender) = RENDER_THREAD_SENDER.get(){
-        let _ = sender.send(
-            ("triangle".to_string(), values.get("triangle").unwrap().clone())
-        );
+pub extern "Rust" fn send_triangle(values: HashMap<String, Value>) -> Value {
+    if let Some(sender) = RENDER_THREAD_SENDER.get() {
+        let _ = sender.send((
+            "triangle".to_string(),
+            values.get("triangle").unwrap().clone(),
+        ));
     }
-    return Value::nil()
+    return Value::nil();
 }
 
 #[no_mangle]
