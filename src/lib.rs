@@ -7,13 +7,16 @@ use std::time::Duration;
 
 use std::sync::{
     mpsc::{self, Receiver, Sender},
-    Arc, OnceLock,
+    Arc, OnceLock, Mutex
 };
 
 use wgpu::util::DeviceExt;
 
 static RENDER_THREAD: OnceLock<JoinHandle<()>> = OnceLock::new();
 static RENDER_THREAD_SENDER: OnceLock<Sender<(String, Value)>> = OnceLock::new();
+
+static SHADER_ASSETS : Mutex<Vec<String>> = Mutex::new(Vec::new());
+static TEXTURE_ASSETS : Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 use winit::{
     application::ApplicationHandler,
@@ -115,6 +118,8 @@ struct State<'a> {
     start_time: Instant,
     uniform_bind_group: wgpu::BindGroup,
     uniform_buffer: wgpu::Buffer,
+
+    bind_groups : Vec<wgpu::BindGroup> 
 }
 
 impl<'a> State<'a> {
@@ -183,6 +188,7 @@ impl<'a> State<'a> {
             height: dimensions.1,
             depth_or_array_layers: 1,
         };
+
         let diffuse_texture = device.create_texture(&wgpu::TextureDescriptor {
             // All textures are stored as 3D, we represent our 2D texture
             // by setting depth to 1.
@@ -384,6 +390,8 @@ impl<'a> State<'a> {
             usage: wgpu::BufferUsages::INDEX,
         });
 
+        
+
         Self {
             instance,
             surface,
@@ -400,8 +408,13 @@ impl<'a> State<'a> {
             uniform_bind_group,
             start_time,
             uniform_buffer,
+            
+            bind_groups : vec![]
         }
     }
+
+
+   
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
@@ -652,6 +665,26 @@ pub extern "Rust" fn send_triangle(values: HashMap<String, Value>) -> Value {
 }
 
 #[no_mangle]
+pub extern "Rust" fn load_asset(values: HashMap<String, Value>) -> Value{
+    
+
+    let asset_type = values.get("asset_type").unwrap().to_string().unwrap(); 
+    let path = values.get("path").unwrap().to_string().unwrap();
+  
+
+
+    match asset_type.as_str(){
+        "shader" => SHADER_ASSETS.lock().unwrap().push(path),
+        "texture" => TEXTURE_ASSETS.lock().unwrap().push(path),
+        _ => () 
+    }
+
+    println!("{:#?}", TEXTURE_ASSETS.lock().unwrap());
+
+    Value::nil()
+} 
+
+#[no_mangle]
 pub extern "Rust" fn value_map() -> HashMap<String, Value> {
     let mut map = HashMap::new();
 
@@ -663,12 +696,17 @@ pub extern "Rust" fn value_map() -> HashMap<String, Value> {
     );
     map.insert(
         "send_message".to_string(),
-        Value::lib_function("send_message", vec!["message".to_string()], None, None),
+        Value::lib_function("send_message", vec!["message"], None, None),
     );
     map.insert(
         "send_triangle".to_string(),
-        Value::lib_function("send_triangle", vec!["triangle".to_string()], None, None),
+        Value::lib_function("send_triangle", vec!["triangle"], None, None),
     );
+    map.insert(
+        "load_asset".to_string(),
+        Value::lib_function("load_asset", vec!["asset_type", "path"], None, None),
+    );
+
 
     map
 }
