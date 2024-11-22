@@ -7,16 +7,21 @@ use std::time::Duration;
 
 use std::sync::{
     mpsc::{self, Receiver, Sender},
-    Arc, OnceLock, Mutex
+    Arc, Mutex, OnceLock,
 };
+
+use std::num::*;
+
+use std::env::current_dir;
+use std::fs;
 
 use wgpu::util::DeviceExt;
 
 static RENDER_THREAD: OnceLock<JoinHandle<()>> = OnceLock::new();
 static RENDER_THREAD_SENDER: OnceLock<Sender<(String, Value)>> = OnceLock::new();
 
-static SHADER_ASSETS : Mutex<Vec<String>> = Mutex::new(Vec::new());
-static TEXTURE_ASSETS : Mutex<Vec<String>> = Mutex::new(Vec::new());
+static SHADER_ASSETS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static TEXTURE_ASSETS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 use winit::{
     application::ApplicationHandler,
@@ -41,7 +46,7 @@ struct Uniforms {
 struct Vertex {
     position: [f32; 3],
     tex_coords: [f32; 2],
-    color : [f32; 3]
+    color: [f32; 3],
 }
 
 impl Vertex {
@@ -74,27 +79,27 @@ const VERTICES: &[Vertex] = &[
     Vertex {
         position: [-0.0868241, 0.49240386, 0.0],
         tex_coords: [0.4131759, 0.99240386],
-        color : [1.0, 1.0, 1.0]
+        color: [1.0, 1.0, 1.0],
     }, // A
     Vertex {
         position: [-0.49513406, 0.06958647, 0.0],
         tex_coords: [0.0048659444, 0.56958647],
-        color : [1.0, 1.0, 1.0]
+        color: [1.0, 1.0, 1.0],
     }, // B
     Vertex {
         position: [-0.21918549, -0.44939706, 0.0],
         tex_coords: [0.28081453, 0.05060294],
-        color : [1.0, 1.0, 1.0]
+        color: [1.0, 1.0, 1.0],
     }, // C
     Vertex {
         position: [0.35966998, -0.3473291, 0.0],
         tex_coords: [0.85967, 0.1526709],
-        color : [1.0, 1.0, 1.0]
+        color: [1.0, 1.0, 1.0],
     }, // D
     Vertex {
         position: [0.44147372, 0.2347359, 0.0],
         tex_coords: [0.9414737, 0.7347359],
-        color : [1.0, 1.0, 1.0]
+        color: [1.0, 1.0, 1.0],
     }, // E
 ];
 
@@ -119,7 +124,7 @@ struct State<'a> {
     uniform_bind_group: wgpu::BindGroup,
     uniform_buffer: wgpu::Buffer,
 
-    bind_groups : Vec<wgpu::BindGroup> 
+    bind_groups: Vec<wgpu::BindGroup>,
 }
 
 impl<'a> State<'a> {
@@ -174,77 +179,76 @@ impl<'a> State<'a> {
 
         surface.configure(&device, &config);
 
-        surface.configure(&device, &config);
-        // NEW!
-        let diffuse_bytes = include_bytes!("saul.png");
-        let diffuse_image = image::load_from_memory(diffuse_bytes).unwrap();
-        let diffuse_rgba = diffuse_image.to_rgba8();
+
+        let mut samplers : Vec<wgpu::Sampler> = Vec::new();
+        let mut views : Vec<wgpu::TextureView> = Vec::new();
 
         use image::GenericImageView;
-        let dimensions = diffuse_image.dimensions();
+        for texture_path in TEXTURE_ASSETS.lock().unwrap().clone() {
+            let mut path = current_dir().unwrap();
+            path.push(texture_path);
 
-        let texture_size = wgpu::Extent3d {
-            width: dimensions.0,
-            height: dimensions.1,
-            depth_or_array_layers: 1,
-        };
+            let bytes = fs::read(path).unwrap();
 
-        let diffuse_texture = device.create_texture(&wgpu::TextureDescriptor {
-            // All textures are stored as 3D, we represent our 2D texture
-            // by setting depth to 1.
-            size: texture_size,
-            mip_level_count: 1, // We'll talk about this a little later
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            // Most images are stored using sRGB, so we need to reflect that here.
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            // TEXTURE_BINDING tells wgpu that we want to use this texture in shaders
-            // COPY_DST means that we want to copy data to this texture
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            label: Some("diffuse_texture"),
-            // This is the same as with the SurfaceConfig. It
-            // specifies what texture formats can be used to
-            // create TextureViews for this texture. The base
-            // texture format (Rgba8UnormSrgb in this case) is
-            // always supported. Note that using a different
-            // texture format is not supported on the WebGL2
-            // backend.
-            view_formats: &[],
-        });
+            let image = image::load_from_memory(&bytes).unwrap();
+            let rgba = image.to_rgba8();
 
-        queue.write_texture(
-            // Tells wgpu where to copy the pixel data
-            wgpu::ImageCopyTexture {
-                texture: &diffuse_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            // The actual pixel data
-            &diffuse_rgba,
-            // The layout of the texture
-            wgpu::ImageDataLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * dimensions.0),
-                rows_per_image: Some(dimensions.1),
-            },
-            texture_size,
-        );
+            let dimensions = rgba.dimensions();
 
-        // We don't need to configure the texture view much, so let's
-        // let wgpu define it.
-        let diffuse_texture_view =
-            diffuse_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let diffuse_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::FilterMode::Nearest,
-            ..Default::default()
-        });
+            let size = wgpu::Extent3d {
+                width: dimensions.0,
+                height: dimensions.1,
+                depth_or_array_layers: 1,
+            };
 
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                label: Some("hello"),
+                mip_level_count: 1,
+                sample_count: 1,
+                size,
+                view_formats: &[],
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            });
+
+            queue.write_texture(
+                // Tells wgpu where to copy the pixel data
+                wgpu::ImageCopyTexture {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                // The actual pixel data
+                &rgba,
+                // The layout of the texture
+                wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4 * dimensions.0),
+                    rows_per_image: Some(dimensions.1),
+                },
+                size,
+            );
+
+            let texture_view =
+                texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+                address_mode_u: wgpu::AddressMode::ClampToEdge,
+                address_mode_v: wgpu::AddressMode::ClampToEdge,
+                address_mode_w: wgpu::AddressMode::ClampToEdge,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Nearest,
+                mipmap_filter: wgpu::FilterMode::Nearest,
+                ..Default::default()
+            });
+
+
+            views.push(texture_view);
+            samplers.push(sampler)
+        }
+
+        
         let texture_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 entries: &[
@@ -256,7 +260,8 @@ impl<'a> State<'a> {
                             view_dimension: wgpu::TextureViewDimension::D2,
                             sample_type: wgpu::TextureSampleType::Float { filterable: true },
                         },
-                        count: None,
+                        //count: Some(NonZero::new(views.len() as u32).unwrap()),
+                        count:None
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
@@ -264,24 +269,41 @@ impl<'a> State<'a> {
                         // This should match the filterable field of the
                         // corresponding Texture entry above.
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
+                        count:None,
+                        //count: Some(NonZero::new(samplers.len() as u32).unwrap()),
                     },
                 ],
                 label: Some("texture_bind_group_layout"),
             });
 
+
+        let mut entries : Vec<wgpu::BindGroupEntry> = Vec::new();
+
+        for i in 0..views.len(){
+            let view = &views[i];
+            let sampler = &samplers[i];
+
+            
+
+            let view_entry = wgpu::BindGroupEntry{
+                binding : i as u32,
+                resource : wgpu::BindingResource::TextureView(view)
+            };
+
+            let sampler_entry = wgpu::BindGroupEntry{
+                binding : (views.len() + i) as u32,
+                resource : wgpu::BindingResource::Sampler(sampler)
+            };
+
+
+            entries.push(view_entry);
+            entries.push(sampler_entry)
+        }
+        
+
         let diffuse_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &texture_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&diffuse_texture_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&diffuse_sampler),
-                },
-            ],
+            entries: &entries,
             label: Some("diffuse_bind_group"),
         });
 
@@ -390,8 +412,6 @@ impl<'a> State<'a> {
             usage: wgpu::BufferUsages::INDEX,
         });
 
-        
-
         Self {
             instance,
             surface,
@@ -408,13 +428,10 @@ impl<'a> State<'a> {
             uniform_bind_group,
             start_time,
             uniform_buffer,
-            
-            bind_groups : vec![]
+
+            bind_groups: vec![],
         }
     }
-
-
-   
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
@@ -580,7 +597,7 @@ impl ApplicationHandler for App<'_> {
                                     Vertex {
                                         position: p,
                                         tex_coords: [0.0, 0.0],
-                                        color : [1.0, 1.0, 1.0]
+                                        color: [1.0, 1.0, 1.0],
                                     }
                                 })
                                 .collect();
@@ -665,24 +682,22 @@ pub extern "Rust" fn send_triangle(values: HashMap<String, Value>) -> Value {
 }
 
 #[no_mangle]
-pub extern "Rust" fn load_asset(values: HashMap<String, Value>) -> Value{
-    
-
-    let asset_type = values.get("asset_type").unwrap().to_string().unwrap(); 
+pub extern "Rust" fn load_asset(values: HashMap<String, Value>) -> Value {
+    let asset_type = values.get("asset_type").unwrap().to_string().unwrap();
     let path = values.get("path").unwrap().to_string().unwrap();
-  
 
+    println!("{:?} {:?}", asset_type, path);
 
-    match asset_type.as_str(){
+    match asset_type.as_str() {
         "shader" => SHADER_ASSETS.lock().unwrap().push(path),
         "texture" => TEXTURE_ASSETS.lock().unwrap().push(path),
-        _ => () 
+        _ => (),
     }
 
     println!("{:#?}", TEXTURE_ASSETS.lock().unwrap());
 
     Value::nil()
-} 
+}
 
 #[no_mangle]
 pub extern "Rust" fn value_map() -> HashMap<String, Value> {
@@ -706,7 +721,6 @@ pub extern "Rust" fn value_map() -> HashMap<String, Value> {
         "load_asset".to_string(),
         Value::lib_function("load_asset", vec!["asset_type", "path"], None, None),
     );
-
 
     map
 }
