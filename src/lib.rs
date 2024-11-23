@@ -179,12 +179,15 @@ impl<'a> State<'a> {
 
         surface.configure(&device, &config);
 
+        let mut samplers: Vec<wgpu::Sampler> = Vec::new();
+        let mut views: Vec<wgpu::TextureView> = Vec::new();
 
-        let mut samplers : Vec<wgpu::Sampler> = Vec::new();
-        let mut views : Vec<wgpu::TextureView> = Vec::new();
+        let textures = TEXTURE_ASSETS.lock().unwrap().clone();
+        let mut layout_entries: Vec<wgpu::BindGroupLayoutEntry> = Vec::new();
 
         use image::GenericImageView;
-        for texture_path in TEXTURE_ASSETS.lock().unwrap().clone() {
+        for i in 0..textures.len() {
+            let texture_path = textures[i].clone();
             let mut path = current_dir().unwrap();
             path.push(texture_path);
 
@@ -231,8 +234,7 @@ impl<'a> State<'a> {
                 size,
             );
 
-            let texture_view =
-                texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
                 address_mode_u: wgpu::AddressMode::ClampToEdge,
                 address_mode_v: wgpu::AddressMode::ClampToEdge,
@@ -243,63 +245,56 @@ impl<'a> State<'a> {
                 ..Default::default()
             });
 
-
             views.push(texture_view);
-            samplers.push(sampler)
+            layout_entries.push(wgpu::BindGroupLayoutEntry {
+                binding: 2 * i as u32,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                },
+                //count: Some(NonZero::new(views.len() as u32).unwrap()),
+                count: None,
+            });
+
+            samplers.push(sampler);
+            layout_entries.push(wgpu::BindGroupLayoutEntry {
+                binding: 2 * i as u32 + 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                // This should match the filterable field of the
+                // corresponding Texture entry above.
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+                //count: Some(NonZero::new(samplers.len() as u32).unwrap()),
+            })
         }
 
-        
         let texture_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            multisampled: false,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        },
-                        //count: Some(NonZero::new(views.len() as u32).unwrap()),
-                        count:None
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        // This should match the filterable field of the
-                        // corresponding Texture entry above.
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count:None,
-                        //count: Some(NonZero::new(samplers.len() as u32).unwrap()),
-                    },
-                ],
+                entries: &layout_entries,
                 label: Some("texture_bind_group_layout"),
             });
 
+        let mut entries: Vec<wgpu::BindGroupEntry> = Vec::new();
 
-        let mut entries : Vec<wgpu::BindGroupEntry> = Vec::new();
-
-        for i in 0..views.len(){
+        for i in 0..views.len() {
             let view = &views[i];
             let sampler = &samplers[i];
 
-            
-
-            let view_entry = wgpu::BindGroupEntry{
-                binding : i as u32,
-                resource : wgpu::BindingResource::TextureView(view)
+            let view_entry = wgpu::BindGroupEntry {
+                binding: 2 * i as u32,
+                resource: wgpu::BindingResource::TextureView(view),
             };
 
-            let sampler_entry = wgpu::BindGroupEntry{
-                binding : (views.len() + i) as u32,
-                resource : wgpu::BindingResource::Sampler(sampler)
+            let sampler_entry = wgpu::BindGroupEntry {
+                binding: 2 * i as u32 + 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
             };
-
 
             entries.push(view_entry);
             entries.push(sampler_entry)
         }
-        
 
         let diffuse_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &texture_bind_group_layout,
